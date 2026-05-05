@@ -1,218 +1,408 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[codz]
-*$py.class
+import tkinter as tk
+from tkinter import ttk, messagebox
+import json
+import os
 
-# C extensions
-*.so
+DATA_FILE = "movies.json"
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+class MovieLibrary:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("🎬 Movie Library — Личная кинотека")
+        self.root.geometry("1000x600")
+        self.root.resizable(True, True)
+        
+        self.movies = []
+        self.current_edit_id = None  # Для редактирования
+        
+        self.load_data()
+        self.create_widgets()
+        self.refresh_table()
+    
+    def create_widgets(self):
+        # ========== РАМКА ДЛЯ ВВОДА ==========
+        input_frame = ttk.LabelFrame(self.root, text="📝 Информация о фильме", padding=10)
+        input_frame.pack(fill="x", padx=10, pady=5)
+        
+        # Название
+        ttk.Label(input_frame, text="Название:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.title_entry = ttk.Entry(input_frame, width=30, font=("Arial", 10))
+        self.title_entry.grid(row=0, column=1, padx=5, pady=5)
+        
+        # Жанр
+        ttk.Label(input_frame, text="Жанр:", font=("Arial", 10, "bold")).grid(row=0, column=2, sticky="w", padx=5, pady=5)
+        self.genre_entry = ttk.Entry(input_frame, width=20, font=("Arial", 10))
+        self.genre_entry.grid(row=0, column=3, padx=5, pady=5)
+        
+        # Год
+        ttk.Label(input_frame, text="Год выпуска:", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        self.year_entry = ttk.Entry(input_frame, width=10, font=("Arial", 10))
+        self.year_entry.grid(row=1, column=1, padx=5, pady=5)
+        
+        # Рейтинг
+        ttk.Label(input_frame, text="Рейтинг (0-10):", font=("Arial", 10, "bold")).grid(row=1, column=2, sticky="w", padx=5, pady=5)
+        self.rating_entry = ttk.Entry(input_frame, width=10, font=("Arial", 10))
+        self.rating_entry.grid(row=1, column=3, padx=5, pady=5)
+        
+        # Кнопки
+        btn_frame = ttk.Frame(input_frame)
+        btn_frame.grid(row=0, column=4, rowspan=2, padx=20, pady=5)
+        
+        self.add_btn = ttk.Button(btn_frame, text="➕ Добавить фильм", command=self.add_movie, width=15)
+        self.add_btn.pack(pady=2)
+        
+        self.edit_btn = ttk.Button(btn_frame, text="✏️ Редактировать", command=self.prepare_edit, width=15, state="disabled")
+        self.edit_btn.pack(pady=2)
+        
+        self.cancel_btn = ttk.Button(btn_frame, text="❌ Отменить редактирование", command=self.cancel_edit, width=15, state="disabled")
+        self.cancel_btn.pack(pady=2)
+        
+        # ========== ФИЛЬТРАЦИЯ ==========
+        filter_frame = ttk.LabelFrame(self.root, text="🔍 Фильтрация", padding=10)
+        filter_frame.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Label(filter_frame, text="По жанру:", font=("Arial", 9)).grid(row=0, column=0, padx=5)
+        self.filter_genre_entry = ttk.Entry(filter_frame, width=20)
+        self.filter_genre_entry.grid(row=0, column=1, padx=5)
+        self.filter_genre_entry.bind("<KeyRelease>", lambda e: self.refresh_table())
+        
+        ttk.Label(filter_frame, text="По году:", font=("Arial", 9)).grid(row=0, column=2, padx=5)
+        self.filter_year_entry = ttk.Entry(filter_frame, width=10)
+        self.filter_year_entry.grid(row=0, column=3, padx=5)
+        self.filter_year_entry.bind("<KeyRelease>", lambda e: self.refresh_table())
+        
+        ttk.Button(filter_frame, text="🔄 Сбросить фильтры", command=self.clear_filters).grid(row=0, column=4, padx=20)
+        
+        # ========== ТАБЛИЦА ==========
+        table_frame = ttk.Frame(self.root)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        
+        # Создание таблицы с сортировкой
+        columns = ("Название", "Жанр", "Год", "Рейтинг")
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=15)
+        
+        # Настройка колонок и привязка сортировки
+        for col in columns:
+            self.tree.heading(col, text=col, command=lambda c=col: self.sort_by_column(c))
+            self.tree.column(col, width=200 if col == "Название" else 150)
+        
+        # Скроллбар
+        scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Привязка выбора строки
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        
+        # ========== НИЖНИЕ КНОПКИ ==========
+        bottom_frame = ttk.Frame(self.root)
+        bottom_frame.pack(fill="x", padx=10, pady=10)
+        
+        self.delete_btn = ttk.Button(bottom_frame, text="🗑️ Удалить выбранный", command=self.delete_movie, width=20)
+        self.delete_btn.pack(side="left", padx=5)
+        
+        self.stats_btn = ttk.Button(bottom_frame, text="📊 Статистика", command=self.show_stats, width=20)
+        self.stats_btn.pack(side="left", padx=5)
+        
+        self.export_btn = ttk.Button(bottom_frame, text="💾 Экспорт в JSON", command=self.export_data, width=20)
+        self.export_btn.pack(side="left", padx=5)
+        
+        # Статусбар
+        self.status_var = tk.StringVar()
+        self.status_var.set("✅ Готово | Всего фильмов: 0")
+        statusbar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        statusbar.pack(fill="x", side="bottom")
+    
+    # ========== СОРТИРОВКА ==========
+    def sort_by_column(self, col):
+        """Сортировка таблицы по столбцу"""
+        if col == "Год":
+            self.movies.sort(key=lambda x: x['year'])
+        elif col == "Рейтинг":
+            self.movies.sort(key=lambda x: x['rating'])
+        else:
+            self.movies.sort(key=lambda x: x[col.lower()])
+        
+        self.refresh_table()
+        messagebox.showinfo("Сортировка", f"Отсортировано по '{col}'")
+    
+    # ========== РЕДАКТИРОВАНИЕ ==========
+    def on_select(self, event):
+        """Выбор фильма в таблице"""
+        selected = self.tree.selection()
+        if selected:
+            self.edit_btn.config(state="normal")
+        else:
+            self.edit_btn.config(state="disabled")
+    
+    def prepare_edit(self):
+        """Подготовка к редактированию"""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Внимание", "Выберите фильм для редактирования!")
+            return
+        
+        # Получаем выбранный фильм
+        item = self.tree.item(selected[0])
+        values = item['values']
+        
+        # Заполняем поля формы
+        self.title_entry.delete(0, tk.END)
+        self.title_entry.insert(0, values[0])
+        
+        self.genre_entry.delete(0, tk.END)
+        self.genre_entry.insert(0, values[1])
+        
+        self.year_entry.delete(0, tk.END)
+        self.year_entry.insert(0, values[2])
+        
+        self.rating_entry.delete(0, tk.END)
+        self.rating_entry.insert(0, values[3])
+        
+        # Меняем режим
+        self.current_edit_id = values[0]  # По названию ищем
+        self.add_btn.config(text="💾 Сохранить изменения", command=self.save_edit)
+        self.cancel_btn.config(state="normal")
+        self.edit_btn.config(state="disabled")
+        
+        # Подсветка полей
+        self.title_entry.config(background="#ffffcc")
+        self.genre_entry.config(background="#ffffcc")
+        
+        messagebox.showinfo("Редактирование", f"Редактируем фильм: {values[0]}\nИзмените данные и нажмите 'Сохранить'")
+    
+    def save_edit(self):
+        """Сохранение отредактированного фильма"""
+        title = self.title_entry.get().strip()
+        genre = self.genre_entry.get().strip()
+        year = self.year_entry.get().strip()
+        rating = self.rating_entry.get().strip()
+        
+        if not self.validate_movie(title, genre, year, rating):
+            return
+        
+        # Ищем и заменяем фильм
+        for i, movie in enumerate(self.movies):
+            if movie['title'] == self.current_edit_id:
+                self.movies[i] = {
+                    "title": title,
+                    "genre": genre,
+                    "year": int(year),
+                    "rating": float(rating)
+                }
+                break
+        
+        self.save_data()
+        self.cancel_edit()
+        self.refresh_table()
+        messagebox.showinfo("Успех", f"Фильм '{title}' успешно обновлён!")
+    
+    def cancel_edit(self):
+        """Отмена редактирования"""
+        self.current_edit_id = None
+        self.add_btn.config(text="➕ Добавить фильм", command=self.add_movie)
+        self.cancel_btn.config(state="disabled")
+        
+        # Очистка полей
+        self.title_entry.delete(0, tk.END)
+        self.genre_entry.delete(0, tk.END)
+        self.year_entry.delete(0, tk.END)
+        self.rating_entry.delete(0, tk.END)
+        
+        # Сброс подсветки
+        self.title_entry.config(background="white")
+        self.genre_entry.config(background="white")
+    
+    # ========== ВАЛИДАЦИЯ ==========
+    def validate_movie(self, title, genre, year, rating):
+        """Проверка корректности ввода"""
+        if not title or not genre:
+            messagebox.showerror("Ошибка", "❌ Название и жанр не могут быть пустыми!")
+            return False
+        
+        try:
+            year_int = int(year)
+            if year_int < 1888 or year_int > 2026:
+                messagebox.showerror("Ошибка", "❌ Год должен быть между 1888 и 2026!")
+                return False
+        except ValueError:
+            messagebox.showerror("Ошибка", "❌ Год должен быть числом!")
+            return False
+        
+        try:
+            rating_float = float(rating)
+            if rating_float < 0 or rating_float > 10:
+                messagebox.showerror("Ошибка", "❌ Рейтинг должен быть от 0 до 10!")
+                return False
+        except ValueError:
+            messagebox.showerror("Ошибка", "❌ Рейтинг должен быть числом!")
+            return False
+        
+        return True
+    
+    def add_movie(self):
+        """Добавление фильма"""
+        title = self.title_entry.get().strip()
+        genre = self.genre_entry.get().strip()
+        year = self.year_entry.get().strip()
+        rating = self.rating_entry.get().strip()
+        
+        # Проверка на дубликаты
+        for movie in self.movies:
+            if movie['title'].lower() == title.lower():
+                messagebox.showerror("Ошибка", f"❌ Фильм '{title}' уже существует!")
+                return
+        
+        if self.validate_movie(title, genre, year, rating):
+            movie = {
+                "title": title,
+                "genre": genre,
+                "year": int(year),
+                "rating": float(rating)
+            }
+            self.movies.append(movie)
+            self.save_data()
+            self.refresh_table()
+            
+            # Очистка полей
+            self.title_entry.delete(0, tk.END)
+            self.genre_entry.delete(0, tk.END)
+            self.year_entry.delete(0, tk.END)
+            self.rating_entry.delete(0, tk.END)
+            
+            messagebox.showinfo("Успех", f"✅ Фильм '{title}' добавлен!")
+    
+    def delete_movie(self):
+        """Удаление выбранного фильма"""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Внимание", "⚠️ Выберите фильм для удаления!")
+            return
+        
+        item = self.tree.item(selected[0])
+        title = item['values'][0]
+        
+        if messagebox.askyesno("Подтверждение", f"🗑️ Удалить фильм '{title}'?"):
+            self.movies = [m for m in self.movies if m['title'] != title]
+            self.save_data()
+            self.refresh_table()
+            messagebox.showinfo("Успех", f"✅ Фильм '{title}' удалён!")
+    
+    # ========== СТАТИСТИКА ==========
+    def show_stats(self):
+        """Показывает статистику по фильмам"""
+        if not self.movies:
+            messagebox.showinfo("Статистика", "📊 Нет фильмов для статистики")
+            return
+        
+        total = len(self.movies)
+        avg_rating = sum(m['rating'] for m in self.movies) / total
+        
+        # Жанры
+        genres = {}
+        for movie in self.movies:
+            genres[movie['genre']] = genres.get(movie['genre'], 0) + 1
+        top_genre = max(genres, key=genres.get) if genres else "Нет"
+        
+        # Годы
+        years = {}
+        for movie in self.movies:
+            years[movie['year']] = years.get(movie['year'], 0) + 1
+        latest_year = max(years.keys()) if years else "Нет"
+        
+        # Топ-3 фильма
+        top_movies = sorted(self.movies, key=lambda x: x['rating'], reverse=True)[:3]
+        top_text = "\n".join([f"{i+1}. {m['title']} - {m['rating']}" for i, m in enumerate(top_movies)])
+        
+        stats_text = f"""
+📊 СТАТИСТИКА ВАШЕЙ КИНОТЕКИ
+{'='*40}
 
-# PyInstaller
-#   Usually these files are written by a python script from a template
-#   before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+📹 Всего фильмов: {total}
+⭐ Средний рейтинг: {avg_rating:.1f}/10
+🎭 Самый популярный жанр: {top_genre} ({genres[top_genre]} фильмов)
+📅 Самый новый фильм: {latest_year} год
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+🏆 ТОП-3 ЛУЧШИХ ФИЛЬМА:
+{top_text}
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py.cover
-.hypothesis/
-.pytest_cache/
-cover/
+💡 Совет: Смотрите больше хорошего кино!
+        """
+        
+        messagebox.showinfo("Статистика", stats_text)
+    
+    def export_data(self):
+        """Экспорт данных в JSON"""
+        if not self.movies:
+            messagebox.showwarning("Экспорт", "Нет данных для экспорта!")
+            return
+        
+        export_file = "movie_export.json"
+        with open(export_file, 'w', encoding='utf-8') as f:
+            json.dump(self.movies, f, ensure_ascii=False, indent=4)
+        
+        messagebox.showinfo("Экспорт", f"✅ Данные экспортированы в {export_file}\n\nПуть: {os.path.abspath(export_file)}")
+    
+    def refresh_table(self):
+        """Обновление таблицы с фильтрацией"""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        genre_filter = self.filter_genre_entry.get().strip().lower()
+        year_filter = self.filter_year_entry.get().strip()
+        
+        filtered_movies = self.movies.copy()
+        
+        if genre_filter:
+            filtered_movies = [m for m in filtered_movies if genre_filter in m['genre'].lower()]
+        
+        if year_filter:
+            try:
+                year_int = int(year_filter)
+                filtered_movies = [m for m in filtered_movies if m['year'] == year_int]
+            except ValueError:
+                pass
+        
+        for movie in filtered_movies:
+            rating_display = f"{movie['rating']:.1f}"
+            # Рейтинг звездочками
+            stars = "★" * int(movie['rating'] // 2) + "☆" * (5 - int(movie['rating'] // 2))
+            self.tree.insert("", tk.END, values=(
+                movie['title'],
+                movie['genre'],
+                movie['year'],
+                f"{rating_display}  {stars}"
+            ))
+        
+        self.status_var.set(f"✅ Всего фильмов: {len(self.movies)} | Показано: {len(filtered_movies)}")
+    
+    def clear_filters(self):
+        """Сброс фильтров"""
+        self.filter_genre_entry.delete(0, tk.END)
+        self.filter_year_entry.delete(0, tk.END)
+        self.refresh_table()
+    
+    def load_data(self):
+        """Загрузка из JSON"""
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                    self.movies = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                self.movies = []
+                self.save_data()
+        else:
+            self.save_data()
+    
+    def save_data(self):
+        """Сохранение в JSON"""
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self.movies, f, ensure_ascii=False, indent=4)
 
-# Translations
-*.mo
-*.pot
 
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
-target/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-# Pipfile.lock
-
-# UV
-#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-# uv.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-# poetry.lock
-# poetry.toml
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
-#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
-# pdm.lock
-# pdm.toml
-.pdm-python
-.pdm-build/
-
-# pixi
-#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
-# pixi.lock
-#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
-#   in the .venv directory. It is recommended not to include this directory in version control.
-.pixi
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# Redis
-*.rdb
-*.aof
-*.pid
-
-# RabbitMQ
-mnesia/
-rabbitmq/
-rabbitmq-data/
-
-# ActiveMQ
-activemq-data/
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.envrc
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#   and can be added to the global gitignore or merged into this file.  For a more nuclear
-#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
-# .idea/
-
-# Abstra
-#   Abstra is an AI-powered process automation framework.
-#   Ignore directories containing user credentials, local state, and settings.
-#   Learn more at https://abstra.io/docs
-.abstra/
-
-# Visual Studio Code
-#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
-#   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
-#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
-#   you could uncomment the following to ignore the entire vscode folder
-# .vscode/
-# Temporary file for partial code execution
-tempCodeRunnerFile.py
-
-# Ruff stuff:
-.ruff_cache/
-
-# PyPI configuration file
-.pypirc
-
-# Marimo
-marimo/_static/
-marimo/_lsp/
-__marimo__/
-
-# Streamlit
-.streamlit/secrets.toml
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = MovieLibrary(root)
+    root.mainloop()
